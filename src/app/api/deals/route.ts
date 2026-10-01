@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { audit } from '@/lib/audit'
 import { z } from 'zod'
 
 const CreateDealSchema = z.object({
@@ -19,8 +22,14 @@ const CreateDealSchema = z.object({
   status: z.enum(['DRAFT', 'PENDING_APPROVAL']).default('DRAFT'),
 })
 
+type SessionUser = { id: string; email: string; role: string; vendorId?: string; categoryIds?: string[] }
+
 export async function GET(request: NextRequest) {
   try {
+    const session = await getServerSession(authOptions)
+    const user = session?.user as SessionUser | undefined
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
     const { searchParams } = new URL(request.url)
     const status = searchParams.get('status')
     const vendorId = searchParams.get('vendorId')
@@ -29,7 +38,14 @@ export async function GET(request: NextRequest) {
 
     const where: Record<string, unknown> = {}
     if (status) where.status = status
-    if (vendorId) where.vendorId = vendorId
+
+    // Role-based data scoping
+    if (user.role === 'VENDOR') {
+      // Vendors only see their own vendor's deals
+      where.vendorId = user.vendorId
+    } else if (vendorId) {
+      where.vendorId = vendorId
+    }
 
     const [deals, total] = await Promise.all([
       prisma.deal.findMany({
@@ -51,8 +67,17 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await getServerSession(authOptions)
+    const user = session?.user as SessionUser | undefined
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
     const body = await request.json()
     const data = CreateDealSchema.parse(body)
+
+    // Vendors can only submit deals for their own vendor
+    if (user.role === 'VENDOR' && user.vendorId && data.vendorId !== user.vendorId) {
+      return NextResponse.json({ error: 'Forbidden: can only create deals for your own vendor.' }, { status: 403 })
+    }
 
     const deal = await prisma.deal.create({
       data: {
@@ -70,16 +95,30 @@ export async function POST(request: NextRequest) {
         aimContractNum: data.aimContractNum,
         notes: data.notes,
         status: data.status,
+        createdById: user.id,
         submittedAt: data.status === 'PENDING_APPROVAL' ? new Date() : undefined,
-        approvals: data.status === 'PENDING_APPROVAL' ? {
-          create: [
-            { step: 1, approverRole: 'BUYER' },
-            { step: 2, approverRole: 'MANAGER' },
-            { step: 3, approverRole: 'ADMIN' },
-          ],
-        } : undefined,
+        approvals:
+          data.status === 'PENDING_APPROVAL'
+            ? {
+                create: [
+                  { step: 1, approverRole: 'BUYER' },
+                  { step: 2, approverRole: 'MANAGER' },
+                  { step: 3, approverRole: 'ADMIN' },
+                ],
+              }
+            : undefined,
       },
       include: { vendor: true },
+    })
+
+    await audit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'CREATE',
+      entity: 'Deal',
+      entityId: deal.id,
+      after: { dealNumber: deal.dealNumber, vendorId: deal.vendorId, status: deal.status },
+      ip: request.headers.get('x-forwarded-for') ?? undefined,
     })
 
     return NextResponse.json(deal, { status: 201 })
