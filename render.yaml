@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install && npm run build
-    startCommand: npx prisma migrate deploy && npx prisma db seed && npm start
+    startCommand: npx prisma migrate deploy && npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
@@ -17,10 +17,6 @@ services:
         sync: false
       - key: NEXTAUTH_SECRET
         generateValue: true
-      - key: SEED_ADMIN_EMAIL
-        value: admin@coborns.com
-      - key: SEED_ADMIN_PASSWORD
-        sync: false
 
 databases:
   - name: vfm-postgres
