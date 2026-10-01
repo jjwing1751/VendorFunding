@@ -1,0 +1,90 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { prisma } from '@/lib/prisma'
+import { z } from 'zod'
+
+const CreateDealSchema = z.object({
+  vendorId: z.string(),
+  fundingType: z.enum(['OI', 'BB', 'LS', 'PA', 'SBP', 'AMAP', 'TPR', 'AWG']),
+  startDate: z.string(),
+  endDate: z.string(),
+  banners: z.array(z.enum(['COB', 'MPF', 'CW', 'TAD', 'HORN'])).default([]),
+  ps3Retail: z.number().optional(),
+  ps4Retail: z.number().optional(),
+  ps5Retail: z.number().optional(),
+  regularCaseCost: z.number().optional(),
+  dealCaseCost: z.number().optional(),
+  totalFunding: z.number().optional(),
+  aimContractNum: z.string().optional(),
+  notes: z.string().optional(),
+  status: z.enum(['DRAFT', 'PENDING_APPROVAL']).default('DRAFT'),
+})
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const status = searchParams.get('status')
+    const vendorId = searchParams.get('vendorId')
+    const page = parseInt(searchParams.get('page') ?? '1')
+    const limit = parseInt(searchParams.get('limit') ?? '50')
+
+    const where: Record<string, unknown> = {}
+    if (status) where.status = status
+    if (vendorId) where.vendorId = vendorId
+
+    const [deals, total] = await Promise.all([
+      prisma.deal.findMany({
+        where,
+        include: { vendor: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      prisma.deal.count({ where }),
+    ])
+
+    return NextResponse.json({ deals, total, page, limit })
+  } catch (err) {
+    console.error('[GET /api/deals]', err)
+    return NextResponse.json({ error: 'Failed to fetch deals' }, { status: 500 })
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
+    const data = CreateDealSchema.parse(body)
+
+    const deal = await prisma.deal.create({
+      data: {
+        vendorId: data.vendorId,
+        fundingType: data.fundingType,
+        startDate: new Date(data.startDate),
+        endDate: new Date(data.endDate),
+        banners: data.banners,
+        ps3Retail: data.ps3Retail,
+        ps4Retail: data.ps4Retail,
+        ps5Retail: data.ps5Retail,
+        regularCaseCost: data.regularCaseCost,
+        dealCaseCost: data.dealCaseCost,
+        totalFunding: data.totalFunding,
+        aimContractNum: data.aimContractNum,
+        notes: data.notes,
+        status: data.status,
+        submittedAt: data.status === 'PENDING_APPROVAL' ? new Date() : undefined,
+        approvals: data.status === 'PENDING_APPROVAL' ? {
+          create: [
+            { step: 1, approverRole: 'BUYER' },
+            { step: 2, approverRole: 'MANAGER' },
+            { step: 3, approverRole: 'ADMIN' },
+          ],
+        } : undefined,
+      },
+      include: { vendor: true },
+    })
+
+    return NextResponse.json(deal, { status: 201 })
+  } catch (err) {
+    console.error('[POST /api/deals]', err)
+    return NextResponse.json({ error: 'Failed to create deal' }, { status: 500 })
+  }
+}

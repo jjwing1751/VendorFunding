@@ -1,0 +1,270 @@
+// VFM – Vendor Funding Management
+// Database: PostgreSQL (Render managed Postgres)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum FundingType {
+  OI    // Off-Invoice
+  BB    // Bill Back
+  LS    // Lump Sum
+  PA    // Performance Allowance
+  SBP   // Scan-Based Promo
+  AMAP  // National Advertised (AMAP)
+  TPR   // Temporary Price Reduction
+  AWG   // AWG deal
+}
+
+enum DealStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum Banner {
+  COB   // Coborns
+  MPF   // Marketplace Foods
+  CW    // Cash Wise
+  TAD   // Tadychs
+  HORN  // Hornbachers
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SKIPPED
+}
+
+enum UserRole {
+  VENDOR
+  BROKER
+  BUYER
+  MANAGER
+  ADMIN
+}
+
+// ─────────────────────────────────────────────
+// Core entities
+// ─────────────────────────────────────────────
+
+model Vendor {
+  id          String   @id @default(cuid())
+  name        String
+  accountNum  String?  @unique
+  contact     String?
+  email       String?
+  phone       String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  deals       Deal[]
+  items       Item[]
+
+  @@map("vendors")
+}
+
+model Item {
+  id          String   @id @default(cuid())
+  upc         String   @unique
+  description String
+  brand       String?
+  pack        String?  // e.g. "12/24oz"
+  size        String?
+  category    String?
+  subcategory String?
+  vendorId    String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  vendor      Vendor?  @relation(fields: [vendorId], references: [id])
+  dealItems   DealItem[]
+
+  @@map("items")
+}
+
+model Deal {
+  id              String      @id @default(cuid())
+  dealNumber      String      @unique @default(cuid()) // human-readable ref
+  vendorId        String
+  fundingType     FundingType
+  status          DealStatus  @default(DRAFT)
+
+  // Dates
+  startDate       DateTime
+  endDate         DateTime
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+
+  // Financial
+  totalFunding    Decimal?    @db.Decimal(12, 2)
+
+  // Price strategy – VFM is source of record → pushed to FMS 400 on approval
+  ps3Retail       Decimal?    @db.Decimal(8, 2)  // Rural
+  ps4Retail       Decimal?    @db.Decimal(8, 2)  // Mid-Comp
+  ps5Retail       Decimal?    @db.Decimal(8, 2)  // Most-Comp
+  regularCaseCost Decimal?    @db.Decimal(10, 2)
+  dealCaseCost    Decimal?    @db.Decimal(10, 2)
+  fms400SyncedAt  DateTime?   // timestamp of last FMS 400 price push
+
+  // Deal details
+  banners         Banner[]
+  aimContractNum  String?     // required for TPR
+  notes           String?
+
+  createdById     String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  vendor          Vendor      @relation(fields: [vendorId], references: [id])
+  items           DealItem[]
+  fundingLines    FundingLine[]
+  approvals       Approval[]
+  importBatch     ImportBatch? @relation(fields: [importBatchId], references: [id])
+  importBatchId   String?
+
+  @@map("deals")
+}
+
+model DealItem {
+  id          String   @id @default(cuid())
+  dealId      String
+  itemId      String
+  upc         String   // denormalized for history
+  description String   // denormalized
+  allowance   Decimal? @db.Decimal(8, 2)  // per-unit allowance
+  quantity    Int?
+  createdAt   DateTime @default(now())
+
+  deal        Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  item        Item     @relation(fields: [itemId], references: [id])
+
+  @@unique([dealId, itemId])
+  @@map("deal_items")
+}
+
+model FundingLine {
+  id          String      @id @default(cuid())
+  dealId      String
+  fundingType FundingType
+  amount      Decimal     @db.Decimal(12, 2)
+  billBackPct Decimal?    @db.Decimal(5, 2)  // for BB type
+  description String?
+  createdAt   DateTime    @default(now())
+
+  deal        Deal        @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@map("funding_lines")
+}
+
+model Approval {
+  id          String         @id @default(cuid())
+  dealId      String
+  step        Int            // 1=Buyer, 2=Category Mgr, 3=Finance, 4=FMS400 push
+  approverRole UserRole
+  approverId  String?
+  status      ApprovalStatus @default(PENDING)
+  notes       String?
+  decidedAt   DateTime?
+  createdAt   DateTime       @default(now())
+
+  deal        Deal           @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@map("approvals")
+}
+
+// ─────────────────────────────────────────────
+// Bulk import
+// ─────────────────────────────────────────────
+
+model ImportBatch {
+  id          String   @id @default(cuid())
+  filename    String?
+  source      String   @default("CAISSP") // CAISSP or manual-grid
+  rowCount    Int
+  okCount     Int      @default(0)
+  warnCount   Int      @default(0)
+  errCount    Int      @default(0)
+  importedBy  String?
+  createdAt   DateTime @default(now())
+
+  deals       Deal[]
+
+  @@map("import_batches")
+}
+
+// ─────────────────────────────────────────────
+// User / auth (NextAuth compatible)
+// ─────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  role          UserRole  @default(BUYER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
