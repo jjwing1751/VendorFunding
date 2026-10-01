@@ -219,14 +219,68 @@ model User {
   email         String    @unique
   emailVerified DateTime?
   image         String?
+  password      String?   // bcrypt hash; null = invite not yet accepted
   role          UserRole  @default(BUYER)
+  active        Boolean   @default(true)
+
+  // Scoping: vendors see only their vendor's data; buyers see only their categories
+  vendorId      String?   // set for VENDOR role
+  categoryIds   String[]  @default([]) // set for BUYER/MANAGER role
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   accounts      Account[]
   sessions      Session[]
+  auditLogs     AuditLog[]
+  invitesSent   Invitation[] @relation("InvitedBy")
 
   @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// Audit log
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  userEmail  String?  // denormalized so log survives user deletion
+  action     String   // CREATE | UPDATE | DELETE | LOGIN | LOGOUT | INVITE
+  entity     String   // Deal | Vendor | User | Invitation …
+  entityId   String?
+  before     Json?    // snapshot before change
+  after      Json?    // snapshot after change
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────
+// Invitations
+// ─────────────────────────────────────────────
+
+model Invitation {
+  id          String    @id @default(cuid())
+  email       String
+  role        UserRole
+  vendorId    String?   // pre-assign vendor scope for VENDOR invites
+  categoryIds String[]  @default([])
+  token       String    @unique @default(cuid())
+  invitedById String?
+  acceptedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  invitedBy   User?     @relation("InvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@map("invitations")
 }
 
 model Account {
