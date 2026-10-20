@@ -79,7 +79,8 @@ Plans in `render.yaml` are `starter` (web) and `basic-256mb` (database). Change 
 | `DATABASE_URL` | PostgreSQL connection string (set from the Render database) |
 | `ADMIN_EMAIL` | First admin account, created when no active admin exists |
 | `ADMIN_NAME` | Display name for that admin |
-| `ADMIN_PASSWORD` | Optional initial password; blank generates one and logs it once |
+| `ADMIN_PASSWORD` | Optional initial password; blank generates one and logs it once. Only used when the first admin is created |
+| `ADMIN_RESET_PASSWORD` | Admin recovery. On the next start the `ADMIN_EMAIL` account gets this temporary password, is unlocked, has its authenticator cleared and is signed out everywhere (created as an admin if it doesn't exist). Applied once per value; remove it after signing in |
 | `SEED_DEMO` | `true` loads the fictional sample data on an empty database |
 | `DEMO_ACCOUNTS` | `true` turns on the shared demo sign-ins (defaults to `SEED_DEMO`); `false` deactivates them at the next start |
 | `DEMO_PASSWORD` | Shared password for the demo sign-ins; blank generates one and logs it once. Changing it re-sets every demo account at the next start |
