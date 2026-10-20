@@ -65,6 +65,32 @@ async function main() {
       if (generated) console.log(`[seed] Temporary admin password (shown once, change it at first sign-in): ${pw}`);
     }
 
+    // 3b. Admin recovery. Set ADMIN_RESET_PASSWORD in Render to regain access to the ADMIN_EMAIL account:
+    // it gets that temporary password (changed at first sign-in), is unlocked, its authenticator is cleared
+    // (set up again at sign-in) and it is signed out everywhere. Each password value is applied only once, so
+    // later restarts don't undo the password you choose. Remove the variable once you're back in.
+    const resetPw = (process.env.ADMIN_RESET_PASSWORD || '').trim();
+    if (resetPw) {
+      const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+      const marker = 'admin_reset_' + sha(email + '|' + resetPw).slice(0, 24);
+      const used = (await tx.select().from(s.counters).where(eq(s.counters.name, marker)))[0];
+      if (!email) console.warn('[seed] ADMIN_RESET_PASSWORD is set but ADMIN_EMAIL is not; nothing reset.');
+      else if (used) console.log('[seed] Admin reset already applied for this ADMIN_RESET_PASSWORD; remove the variable in Render.');
+      else if (resetPw.length < 12) console.warn('[seed] ADMIN_RESET_PASSWORD must be at least 12 characters; nothing reset.');
+      else {
+        const u = (await tx.select().from(s.users).where(eq(s.users.email, email)))[0];
+        if (u?.demo) console.warn(`[seed] ${email} is a demo account; admin recovery only works for real accounts.`);
+        else {
+          const vals = { roleId: adminRole.id, vendorId: null, status: 'ACTIVE' as const, passwordHash: await bcrypt.hash(resetPw, 12), mustChangePassword: true, passwordChangedAt: new Date(), failedLogins: 0, lockedUntil: null, totpEnabled: false, totpSecret: null };
+          if (u) { await tx.update(s.users).set(vals).where(eq(s.users.id, u.id)); await tx.delete(s.sessions).where(eq(s.sessions.userId, u.id)); }
+          else await tx.insert(s.users).values({ email, name: process.env.ADMIN_NAME || 'Fundline Admin', ...vals });
+          await tx.insert(s.counters).values({ name: marker, value: 1 });
+          await audit(tx, 'Admin access recovered', 'user', email, `${u ? 'Password reset, account unlocked, authenticator cleared, sessions ended' : 'Admin account created'} via ADMIN_RESET_PASSWORD at startup; password change and MFA setup required at sign-in`);
+          console.log(`[seed] Admin access recovered for ${email}. Sign in with ADMIN_RESET_PASSWORD, then remove that variable in Render.`);
+        }
+      }
+    }
+
     // 4. Demo data (only into an empty database)
     if ((process.env.SEED_DEMO ?? 'true') === 'true') {
       const vcount = (await tx.select({ n: sql<number>`count(*)::int` }).from(s.vendors))[0].n;
