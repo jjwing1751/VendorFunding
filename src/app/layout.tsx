@@ -1,25 +1,12 @@
-import type { Metadata } from 'next'
-import './globals.css'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import AuthProvider from '@/components/AuthProvider'
-import AppShell from '@/components/layout/AppShell'
+import type { Metadata } from 'next';
+import './globals.css';
 
-export const metadata: Metadata = {
-  title: 'VFM · Vendor Funding Management',
-  description: 'Coborns Vendor Funding Management System',
-}
+export const metadata: Metadata = { title: 'Fundline', description: 'Vendor funding management', robots: { index: false, follow: false } };
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const session = await getServerSession(authOptions)
-
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>
-        <AuthProvider session={session}>
-          <AppShell session={session}>{children}</AppShell>
-        </AuthProvider>
-      </body>
+      <body>{children}</body>
     </html>
-  )
+  );
 }
